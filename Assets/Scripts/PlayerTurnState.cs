@@ -44,7 +44,7 @@ namespace Reversi
             if (canPlaceCount > 0)
             {
                 var random = Random.Range(0, canPlaceCount);
-                await _gameManager.PlacePiece(canPlaces[random].index, true, token);
+                await _gameManager.PlacePieceAsync(canPlaces[random].index, true, token);
             }
         }
 

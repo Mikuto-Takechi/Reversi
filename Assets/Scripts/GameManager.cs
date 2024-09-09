@@ -14,6 +14,7 @@ namespace Reversi
         [SerializeField] private float _pieceDistance = 1.25f;
         [SerializeField] private Text _turnView;
         [SerializeField, Tooltip("プレイヤーの待ち時間")] private float _timeLimit = 10f;
+        [SerializeField, Tooltip("プレイヤーが先行かどうか")] private bool _isPlayerFirst = true;
         
         private const int BoardRow = 8;
         private const int BoardCol = 8;
@@ -28,11 +29,45 @@ namespace Reversi
             CreatePiece(new CellIndex(4, 4), true);
             CreatePiece(new CellIndex(3, 4), false);
             CreatePiece(new CellIndex(4, 3), false);
-            
+            StartLoop(_isPlayerFirst);
+        }
+
+        void StartLoop(bool playerFirst)
+        {
+            _turnList.Clear();
+            if (!playerFirst) _turnList.Add(new EnemyTurnState(this, _turnView));
             _turnList.Add(new PlayerTurnState(this, _turnView, _timeLimit));
-            _turnList.Add(new EnemyTurnState(this, _turnView));
+            if (playerFirst) _turnList.Add(new EnemyTurnState(this, _turnView));
             _turnList.Add(new JudgeEndState(this));
             TurnLoop().Forget();
+        }
+
+        public void BoardInitialize(Queue<CellIndex> importQuery)
+        {
+            for (int row = 0; row < BoardRow; row++)
+            {
+                for (int col = 0; col < BoardCol; col++)
+                {
+                    if (_board[row, col])
+                    {
+                        Destroy(_board[row, col].gameObject);
+                        _board[row, col] = null;
+                    }
+                }
+            }
+            CreatePiece(new CellIndex(3, 3), true);
+            CreatePiece(new CellIndex(4, 4), true);
+            CreatePiece(new CellIndex(3, 4), false);
+            CreatePiece(new CellIndex(4, 3), false);
+            GameRecord.Clear();
+            bool isBlack = _isPlayerFirst;
+            while (importQuery is { Count: > 0 })
+            {
+                PlacePiece(importQuery.Dequeue(), isBlack);
+                isBlack = !isBlack;
+            }
+            _cts?.Cancel();
+            StartLoop(isBlack);
         }
 
         async UniTaskVoid TurnLoop()
@@ -84,7 +119,7 @@ namespace Reversi
                 var index = await CellClickRequester.CompletionSource.Task.AttachExternalCancellation(token);
                 if (CanPlacePosition(index, true, null))
                 {
-                    return PlacePiece(index, true, defaultToken);
+                    return PlacePieceAsync(index, true, defaultToken);
                 }
                 await UniTask.Yield(token);
             }
@@ -112,7 +147,7 @@ namespace Reversi
         /// <summary>
         /// 駒を配置する。
         /// </summary>
-        public async UniTask PlacePiece(CellIndex cellIndex, bool isBlack, CancellationToken ct)
+        public async UniTask PlacePieceAsync(CellIndex cellIndex, bool isBlack, CancellationToken ct)
         {
             List<CellIndex> allFlipPieces = new();
             if (!CanPlacePosition(cellIndex, isBlack, allFlipPieces)) return;
@@ -122,6 +157,19 @@ namespace Reversi
             foreach (var index in allFlipPieces)
             {
                 await _board[index.Row, index.Col].Flip(isBlack, 0.25f, ct);
+            }
+            GameRecord.Add(cellIndex.ToString());
+        }
+
+        void PlacePiece(CellIndex cellIndex, bool isBlack)
+        {
+            List<CellIndex> allFlipPieces = new();
+            if (!CanPlacePosition(cellIndex, isBlack, allFlipPieces)) return;
+            CreatePiece(cellIndex, isBlack);
+            
+            foreach (var index in allFlipPieces)
+            {
+                _board[index.Row, index.Col].SetFront(isBlack);
             }
             GameRecord.Add(cellIndex.ToString());
         }

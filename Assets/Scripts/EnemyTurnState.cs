@@ -26,7 +26,7 @@ namespace Reversi
                     if (maxFlipData.canFlipCount < flipData.canFlipCount)
                         maxFlipData = flipData;
                 }
-                await _gameManager.PlacePiece(maxFlipData.Index, false, token);
+                await _gameManager.PlacePieceAsync(maxFlipData.Index, false, token);
             }
             await UniTask.WaitForSeconds(1f, cancellationToken: token);
         }

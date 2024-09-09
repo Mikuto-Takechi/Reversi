@@ -35,12 +35,7 @@ namespace Reversi
             _fileNameInputField.text = removedString;
             if (removedString == String.Empty) return;
             var query = ImportGameRecord(removedString);
-            bool isBlack = true;
-            while (query.Count > 0)
-            {
-                _gameManager.PlacePiece(query.Dequeue(), isBlack, destroyCancellationToken).Forget();
-                isBlack = !isBlack;
-            }
+            _gameManager.BoardInitialize(query);
         }
         void Export()
         {
