@@ -1,8 +1,10 @@
+using System;
+using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
-using UniRx;
 using UnityEngine;
 using UnityEngine.UI;
+using Random = UnityEngine.Random;
 
 namespace Reversi
 {
@@ -16,16 +18,16 @@ namespace Reversi
         {
             _turnText.text = "プレイヤーのターン";
             _turnText.color = Color.yellow;
-            _gameManager.AllowPlayerInput(true);
             var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             //  プレイヤーが配置するのを待つ
-            await UniTask.WhenAny(_gameManager.OnPlaced.First().ToUniTask(cancellationToken:cts.Token), 
-                TimeLimitCounter(cts.Token));
+            var result =  await UniTask.WhenAny(_gameManager.WaitPlaceAsync(cts.Token, token), TimeLimitCounter(cts.Token));
             cts.Cancel();
-            _gameManager.AllowPlayerInput(false);
+            if (result.hasResultLeft)
+            {
+                await result.result;
+            }
             await UniTask.WaitForSeconds(1f, cancellationToken: token);
         }
-
         async UniTask TimeLimitCounter(CancellationToken token)
         {
             float timer = _timeLimit;
@@ -36,11 +38,13 @@ namespace Reversi
                 if (timer <= 0) break;
                 _turnText.text = $"プレイヤーのターン:{timer:0.00}";
             }
-            int canPlaceCount = _gameManager.GetCanPlacePositions(true, out var canPlaces);
+
+            List<(CellIndex index, int canFlipCount)> canPlaces = new();
+            int canPlaceCount = _gameManager.GetCanPlacePositions(true, canPlaces);
             if (canPlaceCount > 0)
             {
                 var random = Random.Range(0, canPlaceCount);
-                _gameManager.PlacePiece(canPlaces[random], true);
+                await _gameManager.PlacePiece(canPlaces[random].index, true, token);
             }
         }
 

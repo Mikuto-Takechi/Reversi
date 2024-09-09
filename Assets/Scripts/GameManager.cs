@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
-using UniRx;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -15,19 +14,14 @@ namespace Reversi
         [SerializeField] private float _pieceDistance = 1.25f;
         [SerializeField] private Text _turnView;
         [SerializeField, Tooltip("プレイヤーの待ち時間")] private float _timeLimit = 10f;
-        private const int BoardWidth = 8;
-        private const int BoardHeight = 8;
-        private Piece[,] _board = new Piece[BoardHeight, BoardWidth];
-        private readonly (int row, int col)[] Directions = 
-        {
-            (0, 1), (0, -1), (1, 0), (-1, 0),
-            (1, 1), (-1, -1), (1, -1), (-1, 1)
-        };
-
+        
+        private const int BoardRow = 8;
+        private const int BoardCol = 8;
+        private Piece[,] _board = new Piece[BoardRow, BoardCol];
         private CancellationTokenSource _cts;
         private List<IState> _turnList = new();
         private IDisposable _playerInput;
-        public readonly Subject<Unit> OnPlaced = new();
+        public readonly List<string> GameRecord = new();
         void Awake()
         {
             CreatePiece(new CellIndex(3, 3), true);
@@ -61,9 +55,9 @@ namespace Reversi
         {
             _cts.Cancel();
             int blackPiece = 0, whitePiece = 0;
-            for (int row = 0; row < BoardHeight; row++)
+            for (int row = 0; row < BoardRow; row++)
             {
-                for (int col = 0; col < BoardWidth; col++)
+                for (int col = 0; col < BoardCol; col++)
                 {
                     if (!_board[row, col]) continue;
 
@@ -82,29 +76,32 @@ namespace Reversi
             else
                 _turnView.text = "ゲーム終了: 敵の勝利";
         }
-
-        public void AllowPlayerInput(bool allow)
+        public async UniTask<UniTask> WaitPlaceAsync(CancellationToken token, CancellationToken defaultToken)
         {
-            _playerInput?.Dispose();
-            if (allow)
+            while (true)
             {
-                _playerInput = CellClickRequester.OnClicked
-                    .Subscribe(index => PlacePiece(index, true)).AddTo(this);
+                CellClickRequester.CompletionSource = new();
+                var index = await CellClickRequester.CompletionSource.Task.AttachExternalCancellation(token);
+                if (CanPlacePosition(index, true, null))
+                {
+                    return PlacePiece(index, true, defaultToken);
+                }
+                await UniTask.Yield(token);
             }
         }
-
-        public int GetCanPlacePositions(bool isBlack, out List<CellIndex> canPlaces)
+        
+        public int GetCanPlacePositions(bool isBlack, List<(CellIndex index, int canFlipCount)> canPlaces)
         {
             int positionCount = 0;
-            canPlaces = new();
-            for (int row = 0; row < BoardHeight; row++)
+            for (int row = 0; row < BoardRow; row++)
             {
-                for (int col = 0; col < BoardWidth; col++)
+                for (int col = 0; col < BoardCol; col++)
                 {
                     var index = new CellIndex(row, col);
-                    if (CanPlacePosition(index, isBlack, out _))
+                    List<CellIndex> allFlipPieces = new();
+                    if (CanPlacePosition(index, isBlack, allFlipPieces))
                     {
-                        canPlaces.Add(index);
+                        canPlaces?.Add((index, allFlipPieces.Count));
                         positionCount++;
                     }
                 }
@@ -112,52 +109,59 @@ namespace Reversi
 
             return positionCount;
         }
-        public void PlacePiece(CellIndex cellIndex, bool isBlack)
+        /// <summary>
+        /// 駒を配置する。
+        /// </summary>
+        public async UniTask PlacePiece(CellIndex cellIndex, bool isBlack, CancellationToken ct)
         {
-            if (!CanPlacePosition(cellIndex, isBlack, out var allFlipPieces)) return;
+            List<CellIndex> allFlipPieces = new();
+            if (!CanPlacePosition(cellIndex, isBlack, allFlipPieces)) return;
             CreatePiece(cellIndex, isBlack);
+            AudioManager.Instance.PlaySE("PlacePiece");
+            
             foreach (var index in allFlipPieces)
             {
-                _board[index.Row, index.Col].IsBlack = !_board[index.Row, index.Col].IsBlack;
+                await _board[index.Row, index.Col].Flip(isBlack, 0.25f, ct);
             }
-            OnPlaced.OnNext(Unit.Default);
+            GameRecord.Add(cellIndex.ToString());
         }
-
+        /// <summary>
+        /// 駒を生成する。
+        /// </summary>
         void CreatePiece(CellIndex cellIndex, bool isBlack)
         {
-            if (!CheckInRange(cellIndex) || _board[cellIndex.Row, cellIndex.Col]) return;
+            if (!CheckWithinRange(cellIndex) || _board[cellIndex.Row, cellIndex.Col]) return;
             _board[cellIndex.Row, cellIndex.Col] = Instantiate(_piecePrefab, _pieceRoot);
             _board[cellIndex.Row, cellIndex.Col].transform.localPosition =
                 new Vector3(cellIndex.Row * _pieceDistance, 0,  cellIndex.Col * _pieceDistance);
-            _board[cellIndex.Row, cellIndex.Col].IsBlack = isBlack;
+            _board[cellIndex.Row, cellIndex.Col].SetFront(isBlack);
         }
         /// <summary>
         /// 指定した場所から8方向を調べてひっくりかえせる場所があるならtrueを返す。
         /// </summary>
-        bool CanPlacePosition(CellIndex cellIndex, bool isBlack, out List<CellIndex> allFlipPieces)
+        public bool CanPlacePosition(CellIndex cellIndex, bool isBlack, List<CellIndex> allFlipPieces)
         {
-            allFlipPieces = new();
-            if (!CheckInRange(cellIndex) || _board[cellIndex.Row, cellIndex.Col]) return false;
+            if (!CheckWithinRange(cellIndex) || _board[cellIndex.Row, cellIndex.Col]) return false;
             bool canPlace = false;
             
-            foreach (var dir in Directions)
+            foreach (var dir in CellIndex.Directions)
             {
-                if (CanPlaceDirection(cellIndex, dir.row, dir.col, isBlack, out var flipPieces))
+                List<CellIndex> flipPieces = new();
+                if (CanPlaceDirection(cellIndex, dir.row, dir.col, isBlack, flipPieces))
                 {
                     canPlace = true;
-                    allFlipPieces.AddRange(flipPieces);
+                    allFlipPieces?.AddRange(flipPieces);
                 }
             }
             return canPlace;
         }
 
-        bool CanPlaceDirection(CellIndex cellIndex, int rowDir, int colDir, bool isBlack, out List<CellIndex> flipPieces)
+        bool CanPlaceDirection(CellIndex cellIndex, int rowDir, int colDir, bool isBlack, List<CellIndex> flipPieces)
         {
-            flipPieces = new();
             cellIndex.Row += rowDir;
             cellIndex.Col += colDir;
             //  1つ隣のマスが (配列の範囲外 || 何もない || 駒の色が同じ)なら置けない
-            if (!CheckInRange(cellIndex) 
+            if (!CheckWithinRange(cellIndex) 
                 || !_board[cellIndex.Row, cellIndex.Col] 
                 || _board[cellIndex.Row, cellIndex.Col].IsBlack == isBlack) 
                 return false;
@@ -168,7 +172,7 @@ namespace Reversi
             {
                 cellIndex.Row += rowDir;
                 cellIndex.Col += colDir;
-                if (!CheckInRange(cellIndex)
+                if (!CheckWithinRange(cellIndex)
                     || !_board[cellIndex.Row, cellIndex.Col])
                 {
                     break;
@@ -184,9 +188,12 @@ namespace Reversi
             return hasEndPoint;
         }
 
-        bool CheckInRange(CellIndex cellIndex)
+        /// <summary>
+        /// 指定したインデックスが配列の範囲内かどうかをチェックする。
+        /// </summary>
+        bool CheckWithinRange(CellIndex cellIndex)
         {
-            return cellIndex.Row is < BoardHeight and >= 0 && cellIndex.Col is < BoardWidth and >= 0;
+            return cellIndex.Row is < BoardRow and >= 0 && cellIndex.Col is < BoardCol and >= 0;
         }
     }
 }

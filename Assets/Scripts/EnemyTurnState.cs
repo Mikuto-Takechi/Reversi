@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -14,11 +15,18 @@ namespace Reversi
         {
             _turnText.text = "敵のターン";
             _turnText.color = Color.red;
-            int canPlaceCount = _gameManager.GetCanPlacePositions(false, out var canPlaces);
+            
+            List<(CellIndex index, int canFlipCount)> canPlaces = new();
+            int canPlaceCount = _gameManager.GetCanPlacePositions(false, canPlaces);
             if (canPlaceCount > 0)
             {
-                var random = Random.Range(0, canPlaceCount);
-                _gameManager.PlacePiece(canPlaces[random], false);
+                (CellIndex Index, int canFlipCount) maxFlipData = (default, 0);
+                foreach (var flipData in canPlaces)
+                {
+                    if (maxFlipData.canFlipCount < flipData.canFlipCount)
+                        maxFlipData = flipData;
+                }
+                await _gameManager.PlacePiece(maxFlipData.Index, false, token);
             }
             await UniTask.WaitForSeconds(1f, cancellationToken: token);
         }
